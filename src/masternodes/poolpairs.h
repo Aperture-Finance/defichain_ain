@@ -284,6 +284,21 @@ struct CRemoveLiquidityMessage {
     }
 };
 
+struct CZapLiquidityMessage {
+    CAccounts from;
+    DCT_ID poolId;
+    CScript shareAddress;
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(from);
+        READWRITE(poolId);
+        READWRITE(shareAddress);
+    }
+};
+
 bool poolInFee(const bool forward, const std::pair<CFeeDir, CFeeDir>& asymmetricFee);
 bool poolOutFee(const bool forward, const std::pair<CFeeDir, CFeeDir>& asymmetricFee);
 

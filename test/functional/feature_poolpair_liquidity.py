@@ -29,10 +29,10 @@ class PoolLiquidityTest (DefiTestFramework):
         # node2: revert create (all)
         self.setup_clean_chain = True
         self.extra_args = [
-            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50'],
-            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50'],
-            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50'],
-            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50']]
+            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50', '-apertureheight=50'],
+            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50', '-apertureheight=50'],
+            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50', '-apertureheight=50'],
+            ['-txnotokens=0', '-amkheight=50', '-bayfrontheight=50', '-apertureheight=50']]
 
     def run_test(self):
         assert_equal(len(self.nodes[0].listtokens()), 1) # only one token == DFI
@@ -187,6 +187,21 @@ class PoolLiquidityTest (DefiTestFramework):
         assert_equal(pool['1']['reserveA'], 150)
         assert_equal(pool['1']['reserveB'], 500)
         assert_equal(pool['1']['totalLiquidity'], 150)
+
+        # Zap liquidity
+        #========================
+        print("Testing zappoolliquidity")
+
+        # more than one token.
+        try:
+            self.nodes[0].zappoolliquidity({
+                accountGold: ["2@" + symbolGOLD, "3@" + symbolSILVER]
+            }, "1", accountGold, [])
+        except JSONRPCException as e:
+            errorString = e.error['message']
+        assert("liquidity zapping requires a single input token" in errorString)
+
+        # TODO(Aperture): Add more test cases.
 
         # Remove liquidity
         #========================

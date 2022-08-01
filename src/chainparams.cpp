@@ -136,6 +136,7 @@ public:
         consensus.FortCanningRoadHeight = 1786000; // April 11, 2022.
         consensus.FortCanningCrunchHeight = 1936000; // June 2, 2022.
         consensus.FortCanningSpringHeight = 2033000; // July 6, 2022.
+        consensus.ApertureHeight = 2033001; // TODO: update this to a sensible height.
         consensus.GreatWorldHeight = std::numeric_limits<int>::max();
 
         consensus.pos.diffLimit = uint256S("00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
@@ -374,6 +375,7 @@ public:
         consensus.FortCanningRoadHeight = 893700;
         consensus.FortCanningCrunchHeight = 1011600;
         consensus.FortCanningSpringHeight = 1086000;
+        consensus.ApertureHeight = 1086001; // TODO: update this to a sensible value.
         consensus.GreatWorldHeight = std::numeric_limits<int>::max();
 
         consensus.pos.diffLimit = uint256S("00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
@@ -554,6 +556,7 @@ public:
         consensus.BayfrontHeight = 0;
         consensus.BayfrontMarinaHeight = 0;
         consensus.BayfrontGardensHeight = 0;
+        consensus.ApertureHeight = 0;
         consensus.ClarkeQuayHeight = 0;
         consensus.DakotaHeight = 10;
         consensus.DakotaCrescentHeight = 10;
@@ -739,6 +742,7 @@ public:
         consensus.BayfrontHeight = 10000000;
         consensus.BayfrontMarinaHeight = 10000000;
         consensus.BayfrontGardensHeight = 10000000;
+        consensus.ApertureHeight = 10000000;
         consensus.ClarkeQuayHeight = 10000000;
         consensus.DakotaHeight = 10000000;
         consensus.DakotaCrescentHeight = 10000000;
@@ -960,6 +964,7 @@ void SetupCommonArgActivationParams(Consensus::Params &consensus) {
     UpdateHeightValidation("AMK", "-amkheight", consensus.AMKHeight);
     UpdateHeightValidation("Bayfront", "-bayfrontheight", consensus.BayfrontHeight);
     UpdateHeightValidation("Bayfront Gardens", "-bayfrontgardensheight", consensus.BayfrontGardensHeight);
+    UpdateHeightValidation("Aperture", "-apertureheight", consensus.ApertureHeight);
     UpdateHeightValidation("Clarke Quay", "-clarkequayheight", consensus.ClarkeQuayHeight);
     UpdateHeightValidation("Dakota", "-dakotaheight", consensus.DakotaHeight);
     UpdateHeightValidation("Dakota Crescent", "-dakotacrescentheight", consensus.DakotaCrescentHeight);
