@@ -59,6 +59,7 @@ enum class CustomTxType : uint8_t
     PoolSwapV2            = 'i',
     AddPoolLiquidity      = 'l',
     RemovePoolLiquidity   = 'r',
+    ZapPoolLiquidity      = 'Z',
     // accounts
     UtxosToAccount        = 'U',
     AccountToUtxos        = 'b',
@@ -124,6 +125,7 @@ inline CustomTxType CustomTxCodeToType(uint8_t ch) {
         case CustomTxType::PoolSwapV2:
         case CustomTxType::AddPoolLiquidity:
         case CustomTxType::RemovePoolLiquidity:
+        case CustomTxType::ZapPoolLiquidity:
         case CustomTxType::UtxosToAccount:
         case CustomTxType::AccountToUtxos:
         case CustomTxType::AccountToAccount:
@@ -347,6 +349,7 @@ using CCustomTxMessage = std::variant<
     CPoolSwapMessageV2,
     CLiquidityMessage,
     CRemoveLiquidityMessage,
+    CZapLiquidityMessage,
     CUtxosToAccountMessage,
     CAccountToUtxosMessage,
     CAccountToAccountMessage,

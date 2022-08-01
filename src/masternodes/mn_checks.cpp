@@ -44,6 +44,7 @@ std::string ToString(CustomTxType type) {
         case CustomTxType::PoolSwapV2:          return "PoolSwap";
         case CustomTxType::AddPoolLiquidity:    return "AddPoolLiquidity";
         case CustomTxType::RemovePoolLiquidity: return "RemovePoolLiquidity";
+        case CustomTxType::ZapPoolLiquidity:    return "ZapPoolLiquidity";
         case CustomTxType::UtxosToAccount:      return "UtxosToAccount";
         case CustomTxType::AccountToUtxos:      return "AccountToUtxos";
         case CustomTxType::AccountToAccount:    return "AccountToAccount";
@@ -143,6 +144,7 @@ CCustomTxMessage customTypeToMessage(CustomTxType txType) {
         case CustomTxType::PoolSwapV2:              return CPoolSwapMessageV2{};
         case CustomTxType::AddPoolLiquidity:        return CLiquidityMessage{};
         case CustomTxType::RemovePoolLiquidity:     return CRemoveLiquidityMessage{};
+        case CustomTxType::ZapPoolLiquidity:        return CZapLiquidityMessage{};
         case CustomTxType::UtxosToAccount:          return CUtxosToAccountMessage{};
         case CustomTxType::AccountToUtxos:          return CAccountToUtxosMessage{};
         case CustomTxType::AccountToAccount:        return CAccountToAccountMessage{};
@@ -198,6 +200,13 @@ class CCustomMetadataParseVisitor
     Res isPostAMKFork() const {
         if(static_cast<int>(height) < consensus.AMKHeight) {
             return Res::Err("called before AMK height");
+        }
+        return Res::Ok();
+    }
+
+    Res isPostApertureFork() const {
+        if(static_cast<int>(height) < consensus.ApertureHeight) {
+            return Res::Err("called before Aperture height");
         }
         return Res::Ok();
     }
@@ -347,6 +356,11 @@ public:
 
     Res operator()(CRemoveLiquidityMessage& obj) const {
         auto res = isPostBayfrontFork();
+        return !res ? res : serialize(obj);
+    }
+
+    Res operator()(CZapLiquidityMessage& obj) const {
+        auto res = isPostApertureFork();
         return !res ? res : serialize(obj);
     }
 
@@ -1319,6 +1333,128 @@ public:
         });
 
         return !res ? res : mnview.SetPoolPair(amount.nTokenId, height, pool);
+    }
+
+    Res operator()(const CZapLiquidityMessage& obj) const {
+        CBalances sumTx = SumAllTransfers(obj.from);
+        if (sumTx.balances.size() != 1) {
+            return Res::Err("liquidity zapping requires a single input token");
+        }
+        std::pair<DCT_ID, CAmount> inputTokenAmount = *sumTx.balances.begin();
+
+        static const DCT_ID DFI_TOKEN_ID = {0}; 
+        if (inputTokenAmount.first != DFI_TOKEN_ID || inputTokenAmount.second <= 0) {
+            return Res::Err("liquidity zapping requires a positive amount of DFI token as input");
+        }
+        auto dusdTokenLookupResult = mnview.GetToken("DUSD");
+        if (!dusdTokenLookupResult)
+            return Res::Err("Cannot find token DUSD");
+        const DCT_ID DUSD_TOKEN_ID = dusdTokenLookupResult->first;
+
+        std::optional<CPoolPair> pair = mnview.GetPoolPair(obj.poolId);
+        if (!pair) {
+            return Res::Err("invalid poolId");
+        }
+        DCT_ID nonDUSDToken;
+        CAmount reserveDUSD, reserveNonDUSD;
+        if (pair->idTokenA == DUSD_TOKEN_ID) {
+            nonDUSDToken = pair->idTokenB;
+            reserveDUSD = pair->reserveA;
+            reserveNonDUSD = pair->reserveB;
+        } else if (pair->idTokenB == DUSD_TOKEN_ID) {
+            nonDUSDToken = pair->idTokenA;
+            reserveDUSD = pair->reserveB;
+            reserveNonDUSD = pair->reserveA;
+        } else {
+            return Res::Err("liquidity zapping only supports pools where one token is DUSD");
+        }
+
+        // Swap DFI for DUSD.
+        CAmount dusdAmount{0};
+        for (const auto& [fromAccount, balances]: obj.from) {
+            if (!HasAuth(fromAccount)) {
+                return Res::Err("missing authorization by source account");
+            }
+            for (const auto& [dct_id, amount]: balances.balances) {
+                if (dct_id != DFI_TOKEN_ID || amount <= 0) continue;
+                auto pool_swap = CPoolSwap(CPoolSwapMessage {
+                    .from = fromAccount,
+                    .to = obj.shareAddress,
+                    .idTokenFrom = DFI_TOKEN_ID,
+                    .idTokenTo = DUSD_TOKEN_ID,
+                    .amountFrom = inputTokenAmount.second,
+                    .maxPrice = POOLPRICE_MAX,
+                }, height);
+                Res dfiToDUSDSwapRes = pool_swap.ExecuteSwap(mnview, {});
+                if (!dfiToDUSDSwapRes) return dfiToDUSDSwapRes;
+                dusdAmount += pool_swap.GetResult().nValue;
+            }
+        }
+
+        // Binary search for the optimal DUSD amount to swap for the other token and provide liquidity.
+        CAmount dusdSwapAmount{0};
+        for (CAmount a = 0, b = dusdAmount; a + 1 < b; ) {
+            dusdSwapAmount = (a + b) >> 1;
+
+            // Simulate swap on a dummy view.
+            CCustomCSView dummy(mnview);
+            auto pool_swap = CPoolSwap(CPoolSwapMessage {
+                .from = obj.shareAddress,
+                .to = obj.shareAddress,
+                .idTokenFrom = DUSD_TOKEN_ID,
+                .idTokenTo = nonDUSDToken,
+                .amountFrom = dusdSwapAmount,
+                .maxPrice = POOLPRICE_MAX,
+            }, height);
+            Res simulatedSwapRes = pool_swap.ExecuteSwap(dummy, {});
+            if (!simulatedSwapRes) return simulatedSwapRes;
+            CAmount nonDUSDLiquidityAmount = pool_swap.GetResult().nValue;
+            CAmount dusdLiquidityAmount = dusdAmount - nonDUSDLiquidityAmount;
+
+            // Simulate adding liquidity.
+            CAmount liqNonDUSD = (arith_uint256(nonDUSDLiquidityAmount) * arith_uint256(pair->totalLiquidity) / reserveNonDUSD).GetLow64();
+            CAmount liqDUSD = (arith_uint256(dusdLiquidityAmount) * arith_uint256(pair->totalLiquidity) / reserveDUSD).GetLow64();
+            if (liqNonDUSD < liqDUSD) a = dusdSwapAmount;
+            else b = dusdSwapAmount;
+        }
+
+        // Swap & add liquidity using the calculated amount.
+        auto pool_swap = CPoolSwap(CPoolSwapMessage {
+            .from = obj.shareAddress,
+            .to = obj.shareAddress,
+            .idTokenFrom = DUSD_TOKEN_ID,
+            .idTokenTo = nonDUSDToken,
+            .amountFrom = dusdSwapAmount,
+            .maxPrice = POOLPRICE_MAX,
+        }, height);
+        Res swapRes = pool_swap.ExecuteSwap(mnview, {});
+        if (!swapRes) return swapRes;
+        CAmount nonDUSDLiquidityAmount = pool_swap.GetResult().nValue;
+        CAmount dusdLiquidityAmount = dusdAmount - nonDUSDLiquidityAmount;
+
+        // Subtract DUSD and nonDUSD token balances.
+        mnview.SubBalances(obj.shareAddress, {
+            .balances = {
+                {DUSD_TOKEN_ID, dusdLiquidityAmount},
+                {nonDUSDToken, nonDUSDLiquidityAmount}
+            }
+        });
+
+        // Add liquidity.
+        CAmount amountA, amountB;
+        if (pair->idTokenA == DUSD_TOKEN_ID) {
+            amountA = dusdLiquidityAmount;
+            amountB = nonDUSDLiquidityAmount;
+        } else {
+            amountA = nonDUSDLiquidityAmount;
+            amountB = dusdLiquidityAmount;
+        }
+        bool slippageProtection = static_cast<int>(height) >= consensus.BayfrontMarinaHeight;
+        auto res = pair->AddLiquidity(amountA, amountB, [&] /*onMint*/(CAmount liqAmount) {
+            CBalances balance{TAmounts{{obj.poolId, liqAmount}}};
+            return addBalanceSetShares(obj.shareAddress, balance);
+        }, slippageProtection);
+        return !res ? res : mnview.SetPoolPair(obj.poolId, height, *pair);
     }
 
     Res operator()(const CUtxosToAccountMessage& obj) const {

@@ -484,6 +484,123 @@ UniValue removepoolliquidity(const JSONRPCRequest& request) {
     return signsend(rawTx, pwallet, optAuthTx)->GetHash().GetHex();
 }
 
+UniValue zappoolliquidity(const JSONRPCRequest& request) {
+    auto pwallet = GetWallet(request);
+
+    RPCHelpMan{"zappoolliquidity",
+               "\nCreates (and submits to local node and network) a zap pool liquidity transaction.\n"
+               "The last optional argument (may be empty array) is an array of specific UTXOs to spend." +
+               HelpRequiringPassphrase(pwallet) + "\n",
+               {
+                       {"from", RPCArg::Type::OBJ, RPCArg::Optional::NO, "",
+                        {
+                                {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The defi address(es) is the key(s), the value(s) is amount in amount@token format. "
+                                                                                     "You should provide exectly two types of tokens for pool's 'token A' and 'token B' in any combinations."
+                                                                                     "If multiple tokens from one address are to be transferred, specify an array [\"amount1@t1\", \"amount2@t2\"]"
+                                                                                     "If \"from\" obj contain only one amount entry with address-key: \"*\" (star), it's means auto-selection accounts from wallet."},
+                        },
+                       },
+                       {"pool", RPCArg::Type::STR, RPCArg::Optional::NO,
+                        "The liquidity pool to zap liquidity into. One of the liquidity pool keys may be specified (id/symbol/creationTx)"},
+                       {"shareAddress", RPCArg::Type::STR, RPCArg::Optional::NO, "The defi address for crediting tokens."},
+                       {"inputs", RPCArg::Type::ARR, RPCArg::Optional::OMITTED_NAMED_ARG,
+                        "A json array of json objects",
+                        {
+                                {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                                 {
+                                         {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction id"},
+                                         {"vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The output number"},
+                                 },
+                                },
+                        },
+                       },
+               },
+               RPCResult{
+                       "\"hash\"                  (string) The hex-encoded hash of broadcasted transaction\n"
+               },
+               RPCExamples{
+                       HelpExampleCli("zappoolliquidity",
+                                      "'{\"address1\":\"1.0@DFI\",\"address2\":\"1.0@DFI\"}' "
+                                      "pool_id share_address '[]'")
+               },
+    }.Check(request);
+
+    if (pwallet->chain().isInitialBlockDownload()) {
+        throw JSONRPCError(RPC_CLIENT_IN_INITIAL_DOWNLOAD, "Cannot create transactions while still in Initial Block Download");
+    }
+    pwallet->BlockUntilSyncedToCurrentChain();
+
+    RPCTypeCheck(request.params, { UniValue::VOBJ, UniValue::VSTR, UniValue::VSTR, UniValue::VARR }, true);
+
+    // decode
+    CZapLiquidityMessage msg{};
+    if (request.params[0].get_obj().getKeys().size() == 1 &&
+        request.params[0].get_obj().getKeys()[0] == "*") { // auto-selection accounts from wallet
+
+        CAccounts foundMineAccounts = GetAllMineAccounts(pwallet);
+
+        CBalances sumTransfers = DecodeAmounts(pwallet->chain(), request.params[0].get_obj()["*"], "*");
+
+        msg.from = SelectAccountsByTargetBalances(foundMineAccounts, sumTransfers, SelectionPie);
+
+        if (msg.from.empty()) {
+            throw JSONRPCError(RPC_INVALID_REQUEST,
+                                   "Not enough balance on wallet accounts, call utxostoaccount to increase it.\n");
+        }
+    }
+    else {
+        msg.from = DecodeRecipients(pwallet->chain(), request.params[0].get_obj());
+    }
+
+    auto token = pcustomcsview->GetTokenGuessId(request.params[1].getValStr(), msg.poolId);
+    if (!token || !pcustomcsview->GetPoolPair(msg.poolId)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Pool not found");
+    }
+
+    msg.shareAddress = DecodeScript(request.params[2].get_str());
+
+    // encode
+    CDataStream markedMetadata(DfTxMarker, SER_NETWORK, PROTOCOL_VERSION);
+    markedMetadata << static_cast<unsigned char>(CustomTxType::ZapPoolLiquidity)
+                   << msg;
+    CScript scriptMeta;
+    scriptMeta << OP_RETURN << ToByteVector(markedMetadata);
+
+    int targetHeight = chainHeight(*pwallet->chain().lock()) + 1;
+
+    const auto txVersion = GetTransactionVersion(targetHeight);
+    CMutableTransaction rawTx(txVersion);
+    rawTx.vout.push_back(CTxOut(0, scriptMeta));
+
+    // auth
+    std::set<CScript> auths;
+    for (const auto& kv : msg.from) {
+        auths.emplace(kv.first);
+    }
+    UniValue const & txInputs = request.params[3];
+    CTransactionRef optAuthTx;
+    rawTx.vin = GetAuthInputsSmart(pwallet, rawTx.nVersion, auths, false /*needFoundersAuth*/, optAuthTx, txInputs);
+
+    CCoinControl coinControl;
+
+    // Set change to from address if there's only one auth address
+    if (auths.size() == 1) {
+        CTxDestination dest;
+        ExtractDestination(*auths.cbegin(), dest);
+        if (IsValidDestination(dest)) {
+            coinControl.destChange = dest;
+        }
+    }
+
+    // fund
+    fund(rawTx, pwallet, optAuthTx, &coinControl);
+
+    // check execution
+    execTestTx(CTransaction(rawTx), targetHeight, optAuthTx);
+
+    return signsend(rawTx, pwallet, optAuthTx)->GetHash().GetHex();
+}
+
 UniValue createpoolpair(const JSONRPCRequest& request) {
     auto pwallet = GetWallet(request);
 
@@ -1293,6 +1410,7 @@ static const CRPCCommand commands[] =
     {"poolpair",    "getpoolpair",              &getpoolpair,               {"key", "verbose" }},
     {"poolpair",    "addpoolliquidity",         &addpoolliquidity,          {"from", "shareAddress", "inputs"}},
     {"poolpair",    "removepoolliquidity",      &removepoolliquidity,       {"from", "amount", "inputs"}},
+    {"poolpair",    "zappoolliquidity",         &zappoolliquidity,          {"from", "poolId", "shareAddress", "inputs"}},
     {"poolpair",    "createpoolpair",           &createpoolpair,            {"metadata", "inputs"}},
     {"poolpair",    "updatepoolpair",           &updatepoolpair,            {"metadata", "inputs"}},
     {"poolpair",    "poolswap",                 &poolswap,                  {"metadata", "inputs"}},

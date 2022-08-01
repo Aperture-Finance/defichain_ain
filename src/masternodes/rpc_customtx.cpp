@@ -134,6 +134,16 @@ public:
         rpcInfo.pushKV("amount", obj.amount.ToString());
     }
 
+    void operator()(const CZapLiquidityMessage& obj) const {
+        CBalances sumTx = SumAllTransfers(obj.from);
+        if (sumTx.balances.size() == 1) {
+            auto amount = *sumTx.balances.begin();
+            rpcInfo.pushKV(amount.first.ToString(), ValueFromAmount(amount.second));
+            rpcInfo.pushKV("poolid", obj.poolId.ToString());
+            rpcInfo.pushKV("shareaddress", ScriptToString(obj.shareAddress));
+        }
+    }
+
     void operator()(const CUtxosToAccountMessage& obj) const {
         rpcInfo.pushKVs(accountsInfo(obj.to));
     }
